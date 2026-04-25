@@ -7,6 +7,33 @@ use Livewire\Volt\Volt; // Pastikan ini di-import di atas
 use App\Models\Barang;        // TAMBAHKAN INI
 use App\Models\Kir;           // TAMBAHKAN INI
 use App\Models\MutasiBarang;  // TAMBAHKAN INI
+use Illuminate\Support\Facades\Auth;
+
+// Route utama untuk Scan Barcode Ruangan
+Route::get('/scan/ruangan/{kode_ruangan}', function ($kode_ruangan) {
+    $ruangan = Ruangan::where('kode_ruangan', $kode_ruangan)->firstOrFail();
+
+    // Jika sudah Login
+    if (Auth::check()) {
+        // Arahkan ke halaman manajemen/inventarisasi yang Anda pakai (kir-detail-table)
+        // Sesuaikan nama route-nya dengan route yang Anda gunakan untuk menampilkan kir-detail-table
+        return redirect()->route('kir.ruangan.detail', $ruangan->id);
+    }
+
+    // Jika belum Login (Skenario 1: Public View)
+    return redirect()->route('public.kir.view', $ruangan->kode_ruangan);
+})->name('scan.ruangan.gate');
+
+// Route untuk Skenario 1 (Public/Guest)
+// Pastikan Anda membuat component Volt/Blade baru untuk tampilan ini
+Route::get('/public/kir/{kode_ruangan}', \App\Livewire\Inventaris\PublicKirView::class)
+    ->name('public.kir.view');
+
+// Route untuk Skenario 2 (Auth - Halaman yang sudah kita kerjakan sebelumnya)
+Route::get('/inventaris/ruangan/{ruangan}', \App\Livewire\Inventaris\KirDetailTable::class)
+    ->middleware(['auth'])
+    ->name('kir.ruangan.detail');
+
 
 Route::get('/', function () {
     return view('welcome');
