@@ -14,32 +14,39 @@ use Illuminate\Support\Facades\Auth;
 | 1. GATEKEEPER & PUBLIC ROUTES (Bisa Diakses Tanpa Login)
 |--------------------------------------------------------------------------
 */
+// resources/routes/web.php
 
-// Pintu masuk utama QR Code Ruangan
+// --- 1. RUTE RUANGAN (Letakkan paling atas untuk rute /scan) ---
 Route::get('/scan/ruangan/{kode_ruangan}', function ($kode_ruangan) {
-    $ruangan = Ruangan::where('kode_ruangan', $kode_ruangan)->firstOrFail();
+    $ruangan = App\Models\Ruangan::where('kode_ruangan', $kode_ruangan)->first();
+    
+    if (!$ruangan) abort(404, "Ruangan dengan kode $kode_ruangan tidak terdaftar.");
 
     if (Auth::check()) {
-        // Skenario 2: Jika sudah login, masuk ke manajemen inventarisasi
         return redirect()->route('kir.ruangan.detail', $ruangan->id);
     }
-
-    // Skenario 1: Jika guest, masuk ke tampilan dokumen publik
     return redirect()->route('public.kir.view', $ruangan->kode_ruangan);
 })->name('scan.ruangan.gate');
 
-// Tampilan KIR Publik (Skenario 1)
-Volt::route('/public/kir/{kode_ruangan}', 'inventaris.public-kir-view')
-    ->name('public.kir.view');
-
-// Scan Barcode Satuan Barang (Label per Item)
+// --- 2. RUTE BARANG SATUAN ---
 Route::get('/scan/{kode}', function ($kode) {
+    // Pastikan variabel $kode yang masuk benar-benar Kode Inventaris
     $barang = App\Models\Barang::with(['sourceable', 'tipe', 'brand'])
                 ->where('kode_inventaris', $kode)
-                ->firstOrFail();
+                ->firstOrFail(); // Akan 404 jika kode tidak ada di DB
+                
     return view('barang.scan', compact('barang'));
 })->name('scan.barang');
 
+// --- 3. RUTE VOLT (Pastikan path file benar) ---
+// Jika file ada di: resources/views/livewire/inventaris/public-kir-view.blade.php
+Volt::route('/public/kir/{kode_ruangan}', 'inventaris.public-kir-view')
+    ->name('public.kir.view');
+
+Volt::route('/inventaris/ruangan/{ruangan}', 'inventaris.kir-detail-table')
+    ->middleware(['auth'])
+    ->name('kir.ruangan.detail');
+    
 Route::get('/', function () {
     return view('welcome');
 });
