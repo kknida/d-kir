@@ -14,39 +14,20 @@ use Illuminate\Support\Facades\Auth;
 | 1. GATEKEEPER & PUBLIC ROUTES (Bisa Diakses Tanpa Login)
 |--------------------------------------------------------------------------
 */
-// resources/routes/web.php
-
-// --- 1. RUTE RUANGAN (Letakkan paling atas untuk rute /scan) ---
-Route::get('/scan/ruangan/{kode_ruangan}', function ($kode_ruangan) {
-    $ruangan = App\Models\Ruangan::where('kode_ruangan', $kode_ruangan)->first();
-    
-    if (!$ruangan) abort(404, "Ruangan dengan kode $kode_ruangan tidak terdaftar.");
+// Ganti /scan/ruangan/ menjadi /scan-ruangan/
+Route::get('/scan-ruangan/{kode_ruangan}', function ($kode_ruangan) {
+    // Cari ruangan berdasarkan kode, jika tidak ada langsung munculkan 404
+    $ruangan = App\Models\Ruangan::where('kode_ruangan', $kode_ruangan)->firstOrFail();
 
     if (Auth::check()) {
+        // Skenario 2: Jika petugas sudah login, masuk ke manajemen inventarisasi
         return redirect()->route('kir.ruangan.detail', $ruangan->id);
     }
+
+    // Skenario 1: Jika guest (scan pake HP biasa), masuk ke tampilan dokumen publik
     return redirect()->route('public.kir.view', $ruangan->kode_ruangan);
 })->name('scan.ruangan.gate');
 
-// --- 2. RUTE BARANG SATUAN ---
-Route::get('/scan/{kode}', function ($kode) {
-    // Pastikan variabel $kode yang masuk benar-benar Kode Inventaris
-    $barang = App\Models\Barang::with(['sourceable', 'tipe', 'brand'])
-                ->where('kode_inventaris', $kode)
-                ->firstOrFail(); // Akan 404 jika kode tidak ada di DB
-                
-    return view('barang.scan', compact('barang'));
-})->name('scan.barang');
-
-// --- 3. RUTE VOLT (Pastikan path file benar) ---
-// Jika file ada di: resources/views/livewire/inventaris/public-kir-view.blade.php
-Volt::route('/public/kir/{kode_ruangan}', 'inventaris.public-kir-view')
-    ->name('public.kir.view');
-
-Volt::route('/inventaris/ruangan/{ruangan}', 'inventaris.kir-detail-table')
-    ->middleware(['auth'])
-    ->name('kir.ruangan.detail');
-    
 Route::get('/', function () {
     return view('welcome');
 });
