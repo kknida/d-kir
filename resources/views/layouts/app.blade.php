@@ -92,10 +92,12 @@
                 </div>
 
                 <div class="flex items-center gap-4" x-data="{ open: false }">
+                    @auth
                     <div class="text-right hidden sm:block">
                         <p class="text-sm font-bold text-slate-800">{{ Auth::user()->nama }}</p>
                         <p class="text-[10px] text-slate-400 font-bold uppercase tracking-tighter">{{ Auth::user()->role }}</p>
                     </div>
+                    @endauth
                     <div class="relative">
                         <button @click="open = !open" class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center border-2 border-white shadow-sm overflow-hidden focus:outline-none">
                             <img src="https://ui-avatars.com/api/?name={{ Auth::user()->nama }}&background=0D8ABC&color=fff" alt="avatar">

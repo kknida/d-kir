@@ -3,8 +3,10 @@
 use Livewire\Volt\Component;
 use App\Models\Ruangan;
 use App\Models\Kir;
+use Livewire\Attributes\Layout;
 use App\Models\SapAsset;
 use App\Models\SapKcl;
+
 
 new class extends Component {
     public $kode_ruangan;
