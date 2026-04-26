@@ -80,6 +80,14 @@ Route::middleware(['auth', 'verified'])->group(function () {
         Route::get('/laporan-mutasi', fn() => view('laporan.mutasi'))->name('laporan.mutasi');
         Route::get('/data-kir', fn() => view('inventaris.index'))->name('data.kir');
         
+        Route::get('/scan/{kode}', function ($kode) {
+            $barang = App\Models\Barang::with(['sourceable', 'tipe', 'brand'])
+                        ->where('kode_inventaris', $kode)
+                        ->firstOrFail();
+                        
+            return view('barang.scan', compact('barang'));
+        })->name('scan.barang');
+
         // Route ini sebelumnya tumpang tindih, disarankan gunakan 'kir.ruangan.detail' saja
         Route::get('/ruangan/{ruangan}/aset', function (Ruangan $ruangan) {
             return view('lokasi.kelola-aset', compact('ruangan'));

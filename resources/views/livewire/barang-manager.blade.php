@@ -28,6 +28,7 @@ new class extends Component {
     public $selectedItem = null;
     public $detailItem = null; 
     public $selectedPhotoUrl = null; 
+    public $editingId = null; // Tambahkan properti untuk track mode edit
 
     // Form Fields
     public $kode_inventaris, $tipe_id, $brand_id, $keterangan, $foto_barang, $is_active = true;
@@ -39,8 +40,26 @@ new class extends Component {
 
     public function openCreateModal()
     {
-        $this->reset(['kode_inventaris', 'tipe_id', 'brand_id', 'keterangan', 'foto_barang', 'source_type', 'source_id']);
+        $this->reset(['editingId', 'kode_inventaris', 'tipe_id', 'brand_id', 'keterangan', 'foto_barang', 'source_type', 'source_id']);
         $this->kode_inventaris = 'INV' . date('ymd') . strtoupper(Str::random(4));
+        $this->isModalOpen = true;
+    }
+
+    // Fungsi baru untuk membuka modal Edit
+    public function edit($id)
+    {
+        $this->reset(['foto_barang']); // Reset upload foto agar tidak konflik
+        $barang = Barang::findOrFail($id);
+        
+        $this->editingId = $id;
+        $this->kode_inventaris = $barang->kode_inventaris;
+        $this->source_type = $barang->sourceable_type;
+        $this->source_id = $barang->sourceable_id;
+        $this->tipe_id = $barang->tipe_id;
+        $this->brand_id = $barang->brand_id;
+        $this->keterangan = $barang->keterangan;
+        $this->is_active = $barang->is_active;
+        
         $this->isModalOpen = true;
     }
 
@@ -86,62 +105,73 @@ new class extends Component {
         $totalRegistered = 0;
         $sapLimit = 0;
 
-        if ($this->source_type === 'App\Models\SapAsset') {
-            $sapItem = SapAsset::find($this->source_id);
-            if ($sapItem) {
-                $sapLimit = (int) $sapItem->quantity;
-                // Hitung barang yang sudah terdaftar dengan Asset Number & Sub Number yang sama
-                $totalRegistered = Barang::whereHasMorph('sourceable', [SapAsset::class], function($q) use ($sapItem) {
-                    $q->where('asset_number', $sapItem->asset_number)
-                    ->where('sub_number', $sapItem->sub_number);
-                })->where('status', '!=', 'hapus')->count();
+        // Validasi Kuota SAP hanya jika mode Tambah atau Ganti Item SAP
+        if (!$this->editingId) {
+            if ($this->source_type === 'App\Models\SapAsset') {
+                $sapItem = SapAsset::find($this->source_id);
+                if ($sapItem) {
+                    $sapLimit = (int) $sapItem->quantity;
+                    $totalRegistered = Barang::whereHasMorph('sourceable', [SapAsset::class], function($q) use ($sapItem) {
+                        $q->where('asset_number', $sapItem->asset_number)
+                        ->where('sub_number', $sapItem->sub_number);
+                    })->where('status', '!=', 'hapus')->count();
+                }
+            } else if ($this->source_type === 'App\Models\SapKcl') {
+                $sapItem = SapKcl::find($this->source_id);
+                if ($sapItem) {
+                    $sapLimit = (int) ($sapItem->quantity ?? $sapItem->unrestricted ?? 0);
+                    $totalRegistered = Barang::whereHasMorph('sourceable', [SapKcl::class], function($q) use ($sapItem) {
+                        $q->where('material', $sapItem->material);
+                    })->where('status', '!=', 'hapus')->count();
+                }
             }
-        } else if ($this->source_type === 'App\Models\SapKcl') {
-            $sapItem = SapKcl::find($this->source_id);
-            if ($sapItem) {
-                $sapLimit = (int) ($sapItem->quantity ?? $sapItem->unrestricted ?? 0);
-                // Hitung barang yang sudah terdaftar dengan Kode Material yang sama
-                $totalRegistered = Barang::whereHasMorph('sourceable', [SapKcl::class], function($q) use ($sapItem) {
-                    $q->where('material', $sapItem->material);
-                })->where('status', '!=', 'hapus')->count();
+
+            if ($sapItem && $totalRegistered >= $sapLimit) {
+                $this->addError('source_id', "Gagal! Jumlah barang terdaftar ($totalRegistered) sudah mencapai batas kuantitas SAP ($sapLimit).");
+                return;
             }
         }
 
-        // 2. Validasi Kuota SAP
-        if ($sapItem && $totalRegistered >= $sapLimit) {
-            $this->addError('source_id', "Gagal! Jumlah barang terdaftar ($totalRegistered) sudah mencapai batas kuantitas SAP ($sapLimit).");
-            return;
-        }
-
-        // 3. Validasi Semua Input Wajib Diisi
-        $this->validate([
+        $rules = [
             'source_type' => 'required',
             'source_id'   => 'required',
             'tipe_id'     => 'required',
             'brand_id'    => 'required',
             'keterangan'  => 'required',
-            'foto_barang' => 'required|image|max:2048',
-        ], [
+            'foto_barang' => $this->editingId ? 'nullable|image|max:2048' : 'required|image|max:2048',
+        ];
+
+        $this->validate($rules, [
             'required' => 'Bidang ini wajib diisi.',
             'foto_barang.required' => 'Foto fisik barang wajib diunggah.',
         ]);
 
-        $path = $this->foto_barang->store('foto-barang', 'public');
+        DB::transaction(function () {
+            $barang = $this->editingId ? Barang::find($this->editingId) : new Barang();
+            
+            $barang->kode_inventaris = $this->kode_inventaris;
+            $barang->sourceable_type = $this->source_type;
+            $barang->sourceable_id = $this->source_id;
+            $barang->tipe_id = $this->tipe_id;
+            $barang->brand_id = $this->brand_id;
+            $barang->keterangan = $this->keterangan;
+            $barang->is_active = $this->is_active;
+            
+            if ($this->foto_barang) {
+                $path = $this->foto_barang->store('foto-barang', 'public');
+                $barang->foto_barang = $path;
+            }
 
-        Barang::create([
-            'kode_inventaris' => $this->kode_inventaris,
-            'sourceable_type' => $this->source_type,
-            'sourceable_id' => $this->source_id,
-            'tipe_id' => $this->tipe_id,
-            'brand_id' => $this->brand_id,
-            'keterangan' => $this->keterangan,
-            'foto_barang' => $path,
-            'is_active' => $this->is_active,
-            'status' => 'tersedia',
-        ]);
+            if (!$this->editingId) {
+                $barang->status = 'tersedia';
+            }
+
+            $barang->save();
+        });
 
         $this->isModalOpen = false;
-        session()->flash('success', 'Barang berhasil diregistrasi.');
+        session()->flash('success', $this->editingId ? 'Data barang berhasil diperbarui.' : 'Barang berhasil diregistrasi.');
+        $this->reset(['editingId']);
     }
 
     public function with(): array
@@ -219,7 +249,6 @@ new class extends Component {
                         <th class="px-5 py-4 text-center w-12">No</th>
                         <th class="px-5 py-4">Data SAP</th>
                         <th class="px-5 py-4">Nama, Spesifikasi & Kategori</th>
-                        <th class="px-5 py-4">Status SAP</th>
                         <th class="px-5 py-4 w-16 text-center">Foto</th>
                         <th class="px-5 py-4 text-center">Aksi</th>
                     </tr>
@@ -245,7 +274,6 @@ new class extends Component {
                                 <div class="font-bold text-slate-800 line-clamp-1">{{ $item->tipe->nama }} {{ $item->brand->nama }} {{ $item->keterangan }} </div>
                                 <div class="text-[10px] text-indigo-500 font-bold uppercase mt-0.5">{{ $item->tipe->kategori->nama ?? 'N/A' }}</div>
                                 
-                                {{-- PERBAIKAN LOGIKA KONDISI & WARNA (POIN 1 & 2) --}}
                                 @php
                                     $rawKondisi = $item->mutasiTerakhir->alasan_mutasi ?? '';
                                     $kondisi = 'Baru';
@@ -255,9 +283,9 @@ new class extends Component {
 
                                     $colorClass = match($kondisi) {
                                         'Baik' => 'text-emerald-600',
-                                        'Rusak Ringan' => 'text-orange-500', // Sesuai permintaan: orange
-                                        'Rusak Berat' => 'text-rose-600',   // Sesuai permintaan: merah
-                                        default => 'text-slate-400',       // Sesuai permintaan: abu
+                                        'Rusak Ringan' => 'text-orange-500',
+                                        'Rusak Berat' => 'text-rose-600',
+                                        default => 'text-slate-400',
                                     };
                                 @endphp
                                 <div class="mt-1 flex items-center gap-1">
@@ -265,10 +293,6 @@ new class extends Component {
                                     <span class="text-[9px] text-slate-400 font-bold uppercase">Kondisi:</span>
                                     <span class="text-[9px] font-black uppercase {{ $colorClass }}">{{ $kondisi }}</span>
                                 </div>
-                            </td>
-                            <td class="px-5 py-3">
-                                <div class="text-[10px] text-slate-400 font-bold">Qty SAP</div>
-                                <div class="text-sm font-black text-slate-700">{{ $item->sourceable->quantity ?? $item->sourceable->unrestricted ?? 0 }} <span class="text-[10px] font-normal text-slate-400">Unit</span></div>
                             </td>
                             <td class="px-5 py-3 text-center">
                                 <button type="button" wire:click="showPhoto({{ $item->id }})" class="w-10 h-10 rounded-xl bg-slate-100 overflow-hidden border border-slate-200 mx-auto">
@@ -281,6 +305,10 @@ new class extends Component {
                             </td>
                             <td class="px-5 py-3">
                                 <div class="flex justify-center gap-1.5">
+                                    {{-- TOMBOL EDIT BARU --}}
+                                    <button wire:click="edit({{ $item->id }})" class="p-2 text-amber-600 hover:bg-amber-600 hover:text-white rounded-xl transition-all border border-amber-50 shadow-sm" title="Edit Data">
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path></svg>
+                                    </button>
                                     <button wire:click="showDetail({{ $item->id }})" class="p-2 text-blue-600 hover:bg-blue-600 hover:text-white rounded-xl transition-all border border-blue-50 shadow-sm" title="Detil Lengkap">
                                         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
                                     </button>
@@ -297,6 +325,155 @@ new class extends Component {
         </div>
         <div class="p-4 bg-slate-50 border-t border-slate-100">{{ $items->links() }}</div>
     </div>
+
+    {{-- MODAL REGISTRASI / EDIT --}}
+    @if($isModalOpen)
+    <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm">
+        <div class="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-4xl flex flex-col max-h-[90vh] overflow-hidden">
+            <div class="px-8 py-5 border-b bg-slate-50 flex justify-between items-center">
+                <h3 class="font-bold text-xl text-slate-800 uppercase tracking-tight">
+                    {{ $editingId ? 'Edit Data Barang' : 'Registrasi Barang Baru' }}
+                </h3>
+                <button wire:click="$set('isModalOpen', false)" class="text-slate-400 hover:text-rose-500 transition-colors">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                </button>
+            </div>
+
+            <div class="p-8 overflow-y-auto">
+                <form wire:submit="store" class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                    <div class="space-y-6">
+                        <div class="grid grid-cols-2 gap-4">
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2 uppercase">Sumber Data <span class="text-rose-500">*</span></label>
+                                <select wire:model.live="source_type" class="w-full rounded-2xl border-slate-200 text-sm focus:ring-blue-500">
+                                    <option value="">Pilih Sumber...</option>
+                                    <option value="App\Models\SapAsset">SAP Asset</option>
+                                    <option value="App\Models\SapKcl">SAP KCL</option>
+                                </select>
+                                @error('source_type') <span class="text-xs text-rose-500 font-semibold">{{ $message }}</span> @enderror
+                            </div>
+
+                            <div>
+                                <label class="block text-sm font-bold text-slate-700 mb-2 uppercase">Item SAP <span class="text-rose-500">*</span></label>
+                                <div x-data="{ open: false, search: '' }" class="relative">
+                                    <button type="button" @click="open = !open" :disabled="!$wire.source_type" class="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm text-left flex justify-between items-center disabled:bg-slate-50">
+                                        <span class="truncate">
+                                            @if($source_id)
+                                                @php $sel = ($source_type === 'App\Models\SapAsset') ? collect($assets)->firstWhere('id', $source_id) : collect($kcls)->firstWhere('id', $source_id); @endphp
+                                                {{ $sel->asset_name ?? $sel->material_description ?? 'Item Terpilih' }}
+                                            @else Cari Item SAP... @endif
+                                        </span>
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"></path></svg>
+                                    </button>
+                                    <div x-show="open" @click.away="open = false" class="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl p-2">
+                                        <input x-model="search" type="text" class="w-full rounded-xl border-slate-200 text-xs mb-2" placeholder="Cari No/Nama...">
+                                        <div class="max-h-48 overflow-y-auto">
+                                            @if($source_type === 'App\Models\SapAsset')
+                                                @foreach($assets as $a)
+                                                <div x-show="'{{ strtolower($a->asset_number . ' ' . $a->asset_name) }}'.includes(search.toLowerCase())" 
+                                                    @click="$wire.set('source_id', {{ $a->id }}); open = false" class="px-3 py-2 hover:bg-blue-50 rounded-xl cursor-pointer text-xs">
+                                                    <b>{{ $a->asset_number }}</b><br>{{ $a->asset_name }}
+                                                </div>
+                                                @endforeach
+                                            @else
+                                                @foreach($kcls as $k)
+                                                <div x-show="'{{ strtolower($k->material . ' ' . $k->material_description) }}'.includes(search.toLowerCase())" 
+                                                    @click="$wire.set('source_id', {{ $k->id }}); open = false" class="px-3 py-2 hover:bg-blue-50 rounded-xl cursor-pointer text-xs">
+                                                    <b>{{ $k->material }}</b><br>{{ $k->material_description }}
+                                                </div>
+                                                @endforeach
+                                            @endif
+                                        </div>
+                                    </div>
+                                </div>
+                                @error('source_id') <span class="text-xs text-rose-500 font-semibold">{{ $message }}</span> @enderror
+                            </div>
+                        </div>
+
+                        @if($source_type && $source_id && !$editingId)
+                        <div class="p-4 rounded-2xl bg-slate-50 border flex justify-between items-center">
+                            <span class="text-xs font-bold text-slate-500 uppercase">Kapasitas SAP Terdaftar:</span>
+                            <span class="text-lg font-black {{ $registeredQty >= $totalQty ? 'text-rose-600' : 'text-blue-600' }}">{{ $registeredQty }} / {{ $totalQty }}</span>
+                        </div>
+                        @endif
+
+                        <div class="grid grid-cols-2 gap-4">
+                            <div x-data="{ open: false, search: '' }">
+                                <label class="block text-sm font-bold text-slate-700 mb-2 uppercase">Tipe <span class="text-rose-500">*</span></label>
+                                <div class="relative">
+                                    <button type="button" @click="open = !open" class="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm text-left flex justify-between items-center">
+                                        <span class="truncate">@if($tipe_id) {{ collect($tipes)->firstWhere('id', $tipe_id)->nama }} @else Pilih Tipe @endif</span>
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"></path></svg>
+                                    </button>
+                                    <div x-show="open" @click.away="open = false" class="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl p-2">
+                                        <input x-model="search" type="text" class="w-full rounded-xl border-slate-200 text-xs mb-2" placeholder="Cari tipe...">
+                                        <div class="max-h-40 overflow-y-auto">
+                                            @foreach($tipes as $t)
+                                            <div x-show="'{{ strtolower($t->nama) }}'.includes(search.toLowerCase())" @click="$wire.set('tipe_id', {{ $t->id }}); open = false" class="px-3 py-2 hover:bg-blue-50 rounded-xl cursor-pointer text-xs">{{ $t->nama }}</div>
+                                            @endforeach
+                                        </div>
+                                    </div>
+                                </div>
+                                @error('tipe_id') <span class="text-xs text-rose-500 font-semibold">{{ $message }}</span> @enderror
+                            </div>
+
+                            <div x-data="{ open: false, search: '' }">
+                                <label class="block text-sm font-bold text-slate-700 mb-2 uppercase">Brand <span class="text-rose-500">*</span></label>
+                                <div class="relative">
+                                    <button type="button" @click="open = !open" class="w-full bg-white border border-slate-200 rounded-2xl px-4 py-2.5 text-sm text-left flex justify-between items-center">
+                                        <span class="truncate">@if($brand_id) {{ collect($brands)->firstWhere('id', $brand_id)->nama }} @else Pilih Brand @endif</span>
+                                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M19 9l-7 7-7-7"></path></svg>
+                                    </button>
+                                    <div x-show="open" @click.away="open = false" class="absolute z-50 w-full mt-2 bg-white border border-slate-200 rounded-2xl shadow-xl p-2">
+                                        <input x-model="search" type="text" class="w-full rounded-xl border-slate-200 text-xs mb-2" placeholder="Cari brand...">
+                                        <div class="max-h-40 overflow-y-auto">
+                                            @foreach($brands as $b)
+                                            <div x-show="'{{ strtolower($b->nama) }}'.includes(search.toLowerCase())" @click="$wire.set('brand_id', {{ $b->id }}); open = false" class="px-3 py-2 hover:bg-blue-50 rounded-xl cursor-pointer text-xs">{{ $b->nama }}</div>
+                                            @endforeach
+                                        </div>
+                                    </div>
+                                </div>
+                                @error('brand_id') <span class="text-xs text-rose-500 font-semibold">{{ $message }}</span> @enderror
+                            </div>
+                        </div>
+
+                        <div>
+                            <label class="block text-sm font-bold text-slate-700 mb-2 uppercase">Ciri Fisik <span class="text-rose-500">*</span></label>
+                            <textarea wire:model="keterangan" rows="3" class="w-full rounded-2xl border-slate-200 text-sm focus:ring-blue-500" placeholder="Detail Spesifikasi / Ciri Fisik..."></textarea>
+                            @error('keterangan') <span class="text-xs text-rose-500 font-semibold">{{ $message }}</span> @enderror
+                        </div>
+                    </div>
+
+                    <div class="space-y-6 text-center">
+                        <div>
+                            <label class="block text-sm font-bold text-slate-700 mb-2 text-left uppercase">Upload Foto <span class="text-rose-500">*</span></label>
+                            <div class="w-full h-64 border-2 border-dashed border-slate-200 rounded-3xl bg-slate-50 flex items-center justify-center overflow-hidden relative group transition-all hover:bg-slate-100">
+                                @if($foto_barang) 
+                                    <img src="{{ $foto_barang->temporaryUrl() }}" class="w-full h-full object-cover">
+                                    <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-all">
+                                        <input type="file" wire:model="foto_barang" class="absolute inset-0 opacity-0 cursor-pointer">
+                                        <span class="text-white text-xs font-bold uppercase">Ganti Foto</span>
+                                    </div>
+                                @else 
+                                    <input type="file" wire:model="foto_barang" class="absolute inset-0 opacity-0 cursor-pointer"> 
+                                    <div class="p-4">
+                                        <svg class="w-10 h-10 text-slate-300 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path d="M12 4v16m8-8H4"></path></svg>
+                                        <p class="text-xs text-slate-400">Klik atau tarik foto ke sini</p>
+                                    </div>
+                                @endif
+                            </div>
+                            @error('foto_barang') <span class="text-xs text-rose-500 font-bold mt-1 block text-left">{{ $message }}</span> @enderror
+                        </div>
+
+                        <button type="submit" class="w-full py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg hover:bg-blue-700 transition-all active:scale-95">
+                            {{ $editingId ? 'Simpan Perubahan' : 'Selesaikan Registrasi' }}
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+    @endif
 
     @if($isDetailModalOpen && $detailItem)
     <div class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">

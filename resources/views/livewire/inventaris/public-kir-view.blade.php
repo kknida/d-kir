@@ -7,8 +7,8 @@ use Livewire\Attributes\Layout;
 use App\Models\SapAsset;
 use App\Models\SapKcl;
 
-
 new class extends Component {
+    #[Layout('layouts.blank')]
     public $kode_ruangan;
 
     public function mount($kode_ruangan)
