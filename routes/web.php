@@ -28,6 +28,12 @@ Route::get('/scan-ruangan/{kode_ruangan}', function ($kode_ruangan) {
     return redirect()->route('public.kir.view', $ruangan->kode_ruangan);
 })->name('scan.ruangan.gate');
 
+// === INI YANG HILANG SEBELUMNYA ===
+// Tampilan KIR Publik (Skenario 1)
+Volt::route('/public/kir/{kode_ruangan}', 'inventaris.public-kir-view')
+    ->name('public.kir.view');
+// ==================================
+
 Route::get('/', function () {
     return view('welcome');
 });
