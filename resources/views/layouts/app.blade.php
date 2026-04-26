@@ -100,7 +100,9 @@
                     @endauth
                     <div class="relative">
                         <button @click="open = !open" class="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center border-2 border-white shadow-sm overflow-hidden focus:outline-none">
+                            @auth
                             <img src="https://ui-avatars.com/api/?name={{ Auth::user()->nama }}&background=0D8ABC&color=fff" alt="avatar">
+                            @endauth    
                         </button>
                         
                         <div x-show="open" 
