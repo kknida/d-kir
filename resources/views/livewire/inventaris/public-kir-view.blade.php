@@ -42,7 +42,7 @@ new class extends Component {
         
         <div class="relative flex items-center justify-center border-b-4 border-double border-slate-900 pb-4 mb-6">
             <div class="absolute left-0 flex-shrink-0">
-                <img src="{{ asset('logo-airnav.png') }}" alt="Logo" class="h-12 sm:h-16 w-auto">
+                <img src="{{ asset('storage/logo-airnav.png') }}" alt="Logo" class="h-12 sm:h-16 w-auto">
             </div>
             
             <div class="text-center">
