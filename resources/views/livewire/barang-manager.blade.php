@@ -83,21 +83,44 @@ new class extends Component {
     }
 
     public function delete($id)
-    {
-        $barang = Barang::with('sourceable')->findOrFail($id);
-        DB::transaction(function () use ($barang) {
-            $barang->update(['status' => 'hapus', 'is_active' => false]);
-            $source = $barang->sourceable;
-            if ($source) {
-                if ($barang->sourceable_type === 'App\Models\SapKcl' && isset($source->unrestricted)) {
-                    $source->decrement('unrestricted', 1);
-                } elseif ($barang->sourceable_type === 'App\Models\SapAsset' && isset($source->quantity)) {
-                    $source->decrement('quantity', 1);
-                }
+{
+    // Eager load mutasiTerakhir untuk mendapatkan lokasi terakhir sebelum dihapus
+    $barang = Barang::with(['sourceable', 'mutasiTerakhir'])->findOrFail($id);
+
+    DB::transaction(function () use ($barang) {
+        // 1. Catat histori ke tabel mutasi_barangs
+        MutasiBarang::create([
+            'barang_id'         => $barang->id,
+            'ruangan_asal_id'   => $barang->mutasiTerakhir->ruangan_tujuan_id ?? null, // Lokasi terakhir
+            'ruangan_tujuan_id' => null, // Sesuai permintaan: diisi null
+            'user_id'           => auth()->id() ?? 1,
+            'tanggal_mutasi'    => now(),
+            'alasan_mutasi'     => "PENGHAPUSAN ASET: Barang dihapus dari sistem master (Status: Hapus)"
+        ]);
+
+        // 2. Hapus data dari tabel KIR (Kartu Inventaris Ruangan)
+        // Ini memastikan barang tidak lagi muncul di daftar inventaris ruangan manapun
+        App\Models\Kir::where('barang_id', $barang->id)->delete();
+
+        // 3. Update status barang menjadi hapus dan non-aktif di tabel master
+        $barang->update([
+            'status'    => 'hapus', 
+            'is_active' => false
+        ]);
+
+        // 4. Update/Kembalikan kuota pada data sumber SAP
+        $source = $barang->sourceable;
+        if ($source) {
+            if ($barang->sourceable_type === 'App\Models\SapKcl' && isset($source->unrestricted)) {
+                $source->decrement('unrestricted', 1);
+            } elseif ($barang->sourceable_type === 'App\Models\SapAsset' && isset($source->quantity)) {
+                $source->decrement('quantity', 1);
             }
-        });
-        session()->flash('success', 'Barang berhasil dihapus.');
-    }
+        }
+    });
+
+    session()->flash('success', 'Barang berhasil dihapus, data KIR dibersihkan, dan riwayat mutasi telah dicatat.');
+}
 
     public function store()
     {
@@ -163,7 +186,7 @@ new class extends Component {
             }
 
             if (!$this->editingId) {
-                $barang->status = 'tersedia';
+                $barang->status = 'Baik';
             }
 
             $barang->save();
@@ -281,7 +304,7 @@ new class extends Component {
                                     elseif (str_contains($rawKondisi, 'Kondisi: Rusak Ringan')) $kondisi = 'Rusak Ringan';
                                     elseif (str_contains($rawKondisi, 'Kondisi: Rusak Berat')) $kondisi = 'Rusak Berat';
 
-                                    $colorClass = match($kondisi) {
+                                    $colorClass = match($item->status) {
                                         'Baik' => 'text-emerald-600',
                                         'Rusak Ringan' => 'text-orange-500',
                                         'Rusak Berat' => 'text-rose-600',
@@ -291,7 +314,7 @@ new class extends Component {
                                 <div class="mt-1 flex items-center gap-1">
                                     <span class="text-[10px] font-mono text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-100 tracking-tighter">Kode: {{ $item->kode_inventaris }}</span>
                                     <span class="text-[9px] text-slate-400 font-bold uppercase">Kondisi:</span>
-                                    <span class="text-[9px] font-black uppercase {{ $colorClass }}">{{ $kondisi }}</span>
+                                    <span class="text-[9px] font-black uppercase {{ $colorClass }}">{{ $item->status }}</span>
                                 </div>
                             </td>
                             <td class="px-5 py-3 text-center">

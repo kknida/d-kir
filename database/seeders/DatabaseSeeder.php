@@ -30,6 +30,9 @@ class DatabaseSeeder extends Seeder
             CabangSeeder::class, 
             GedungSeeder::class,
             LantaiSeeder::class,
+            RuanganSeeder::class,
+            JabatanSeeder::class,
+            PenanggungJawabSeeder::class
         ]);
     }
 }

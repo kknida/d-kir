@@ -124,27 +124,38 @@ new class extends Component {
             'alasan_keluar' => 'required|string|max:500'
         ]);
 
-        $kir = Kir::findOrFail($this->keluarkan_kir_id);
+        $kir = Kir::with('barang')->findOrFail($this->keluarkan_kir_id);
 
         DB::transaction(function () use ($kir) {
-            // Update data KIR
+            // 1. Update kondisi di tabel KIR (Data di Ruangan)
             $kir->update([
                 'kondisi' => $this->kondisi_keluar,
             ]);
 
-            // Catat sebagai histori mutasi (Update Status)
+            // 2. Update status di tabel Barang (Data Master)
+            // Disini kita masukkan nilai "Baik", "Rusak Ringan", atau "Rusak Berat"
+            if ($kir->barang) {
+                $kir->barang->update([
+                    'status' => $this->kondisi_keluar, 
+                    'is_active' => true,
+                ]);
+            }
+
+            // 3. Catat histori mutasi
             MutasiBarang::create([
                 'barang_id' => $kir->barang_id,
                 'ruangan_asal_id' => $this->ruangan->id,
                 'ruangan_tujuan_id' => $this->ruangan->id,
                 'user_id' => auth()->id() ?? 1,
                 'tanggal_mutasi' => now(),
-                'alasan_mutasi' => "UPDATE KONDISI DI RUANGAN: {$this->alasan_keluar} | Kondisi Sekarang: {$this->kondisi_keluar}"
+                'alasan_mutasi' => "UPDATE STATUS MASTER: {$this->alasan_keluar} | Kondisi: {$this->kondisi_keluar}"
             ]);
         });
 
         $this->isKeluarkanModalOpen = false;
-        session()->flash('success', 'Kondisi aset berhasil diperbarui tanpa pemindahan.');
+        $this->reset(['kondisi_keluar', 'alasan_keluar', 'keluarkan_kir_id']);
+        
+        session()->flash('success', 'Status master barang telah diperbarui menjadi ' . $this->kondisi_keluar);
     }
 
     public function prosesKeluarkan()
@@ -154,22 +165,37 @@ new class extends Component {
             'alasan_keluar' => 'required|string|max:500'
         ]);
 
-        $kir = Kir::findOrFail($this->keluarkan_kir_id);
+        // Tambahkan with('barang') agar relasi terload dengan baik
+        $kir = Kir::with('barang')->findOrFail($this->keluarkan_kir_id);
 
         DB::transaction(function () use ($kir) {
+            // 1. Update status pada tabel Master Barang
+            // Menyimpan status sesuai kondisi: Baik / Rusak Ringan / Rusak Berat
+            if ($kir->barang) {
+                $kir->barang->update([
+                    'status' => $this->kondisi_keluar,
+                    'is_active' => true, // Memastikan barang tetap aktif di sistem master
+                ]);
+            }
+
+            // 2. Catat Histori Mutasi (Penarikan ke Gudang)
             MutasiBarang::create([
                 'barang_id' => $kir->barang_id,
                 'ruangan_asal_id' => $kir->ruangan_id,
-                'ruangan_tujuan_id' => null, 
+                'ruangan_tujuan_id' => null, // null berarti kembali ke gudang/non-ruangan
                 'user_id' => auth()->id() ?? 1,
                 'tanggal_mutasi' => now(),
                 'alasan_mutasi' => "DIKELUARKAN KE GUDANG | Kondisi: {$this->kondisi_keluar} | Alasan: {$this->alasan_keluar}"
             ]);
+
+            // 3. Hapus data dari tabel KIR (Barang keluar dari ruangan tersebut)
             $kir->delete(); 
         });
 
         $this->isKeluarkanModalOpen = false;
-        session()->flash('success', 'Aset berhasil ditarik ke Gudang.');
+        $this->reset(['kondisi_keluar', 'alasan_keluar', 'keluarkan_kir_id']);
+        
+        session()->flash('success', "Aset berhasil ditarik ke Gudang dengan status: {$this->kondisi_keluar}.");
     }
 
     //
@@ -246,13 +272,9 @@ new class extends Component {
                 })->latest()->paginate($this->perPage),
 
             // Memperbaiki pemanggilan variabel di Blade
-            'pilihanBarang' => Barang::where('status', '!=', 'hapus')
-                ->where(function($q) {
-                    $q->whereDoesntHave('kirs') // Di Gudang
-                      ->orWhereHas('kirs', function($query) {
-                          $query->where('ruangan_id', '!=', $this->ruangan->id); // Di Ruangan Lain (untuk Mutasi)
-                      });
-                })->with(['sourceable', 'lokasiTerkini.ruangan'])->get(),
+            'pilihanBarang' => Barang::with(['tipe', 'brand', 'sourceable'])
+                            ->where('status', '!=', 'hapus')
+                            ->get(),
 
             'barangDenganHistori' => MutasiBarang::pluck('barang_id')->unique()->toArray(),
         ];
@@ -362,14 +384,23 @@ new class extends Component {
                     <div>
                         <label class="block text-sm font-bold text-slate-700 mb-2">Pilih Aset Fisik <span class="text-rose-500">*</span></label>
                         <div x-data="{
-                                open: false, search: '',
-                                get selectedName() {
-                                    let items = @js($pilihanBarang);
-                                    let found = items.find(i => i.id == $wire.barang_id);
-                                    if(!found) return 'Cari Kode / Nama Aset...';
-                                    return found.kode_inventaris + ' - ' + (found.sourceable ? (found.sourceable.asset_name || found.sourceable.material_description) : 'Aset');
-                                }
-                             }" @click.away="open = false" class="relative w-full">
+                            open: false, 
+                            search: '',
+                            get selectedName() {
+                                        let items = @js($pilihanBarang);
+                                        let found = items.find(i => i.id == $wire.barang_id);
+                                        
+                                        if(!found) return 'Cari Kode / Nama Aset...';
+
+                                        // Menggunakan optional chaining (?.) untuk menghindari error jika null
+                                        let tipe = found.tipe?.nama || '';
+                                        let brand = found.brand?.nama || '';
+                                        let ket = found.keterangan || '';
+
+                                        // Gunakan trim() untuk membersihkan spasi berlebih jika tipe/brand kosong
+                                        return (tipe + ' ' + brand + ' ' + ket).trim();
+                                    }
+                            }" @click.away="open = false" class="relative w-full">
                              
                             <button type="button" @click="open = !open" class="w-full text-left bg-white border-2 border-slate-200 rounded-xl px-4 py-3 text-sm focus:ring-2 focus:ring-indigo-500 flex justify-between items-center transition-all">
                                 <span x-text="selectedName" class="truncate pr-4 font-bold text-slate-700"></span>
@@ -388,8 +419,8 @@ new class extends Component {
                                             class="px-4 py-3 text-sm hover:bg-indigo-50 cursor-pointer rounded-lg transition-colors border-b border-slate-50 last:border-0">
                                             <div class="flex justify-between items-start gap-2">
                                                 <div class="flex-1">
-                                                    <div class="font-bold text-indigo-700 font-mono text-xs mb-0.5">{{ $b->kode_inventaris }}</div>
-                                                    <div class="text-slate-700 font-medium leading-tight text-xs">{{ $b->sourceable->asset_name ?? $b->sourceable->material_description ?? 'Aset' }}</div>
+                                                    <div class="font-bold text-indigo-700 font-mono text-xs mb-0.5">{{ $b->sourceable->material ?? $b->sourceable->asset_number ?? 'Aset' }} | {{ $b->kode_inventaris }}</div>
+                                                    <div class="text-slate-700 font-medium leading-tight text-xs">{{ $b->tipe->nama }} {{ $b->brand->nama }} {{ $b->keterangan }}</div>
                                                 </div>
                                                 @if($b->lokasiTerkini && $b->lokasiTerkini->ruangan)
                                                     <div class="shrink-0 flex flex-col items-end">
@@ -497,13 +528,13 @@ new class extends Component {
     @if($isKeluarkanModalOpen)
     <div class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm">
         <div class="bg-white rounded-[2rem] shadow-2xl w-full max-w-md overflow-hidden flex flex-col">
-            <div class="px-6 py-5 border-b border-rose-100 bg-rose-50 flex items-center gap-3">
-                <div class="p-2 bg-rose-100 rounded-full text-rose-600">
+            <div class="px-6 py-5 border-b border-rose-100 bg-blue-50 flex items-center gap-3">
+                <!-- <div class="p-2 bg-rose-100 rounded-full text-rose-600">
                     <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                </div>
+                </div> -->
                 <div>
-                    <h3 class="font-bold text-lg text-rose-900 uppercase">Manajemen Kondisi Aset</h3>
-                    <p class="text-[10px] text-rose-600 font-bold uppercase tracking-tighter italic">Pilih simpan untuk update atau tarik untuk ke gudang</p>
+                    <h3 class="font-bold text-lg text-blue-900 uppercase">Manajemen Kondisi Aset</h3>
+                    <p class="text-[10px] text-blue-600 font-bold uppercase tracking-tighter italic">Pilih simpan untuk update atau tarik untuk ke gudang</p>
                 </div>
             </div>
             
